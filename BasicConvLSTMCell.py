@@ -81,7 +81,7 @@ class BasicConvLSTMCell(ConvRNNCell):
 
     def __call__(self, inputs, state, z, scope=None):
         """Long short-term memory cell (LSTM)."""
-        with tf.variable_scope(scope or type(self).__name__):  # "BasicLSTMCell"
+        with tf.compat.v1.variable_scope(scope or type(self).__name__):  # "BasicLSTMCell"
             # Parameters of gates are concatenated into one multiply for efficiency.
             if self._state_is_tuple:
                 c, h = state
@@ -100,7 +100,7 @@ class BasicConvLSTMCell(ConvRNNCell):
             new_h = self._activation(new_c) * tf.nn.sigmoid(o)
 
             if self._state_is_tuple:
-                new_state = tf.tuple([new_c, new_h])
+                new_state = tf.tuple(tensors=[new_c, new_h])
             else:
                 new_state = tf.concat(axis=3, values=[new_c, new_h])
             # Also include gate values
@@ -137,19 +137,19 @@ def _conv_linear(args, filter_size, num_features, bias, bias_start=0.0, scope=No
     dtype = [a.dtype for a in args][0]
 
     # Now the computation.
-    with tf.variable_scope(scope or "Conv"):
-        matrix = tf.get_variable(
+    with tf.compat.v1.variable_scope(scope or "Conv"):
+        matrix = tf.compat.v1.get_variable(
             "Matrix", [filter_size[0], filter_size[1], total_arg_size_depth, num_features], dtype=dtype)
         if len(args) == 1:
-            res = tf.nn.conv2d(args[0], matrix, strides=[1, 1, 1, 1], padding='SAME')
+            res = tf.nn.conv2d(input=args[0], filters=matrix, strides=[1, 1, 1, 1], padding='SAME')
         else:
-            res = tf.nn.conv2d(tf.concat(axis=3, values=args), matrix, strides=[1, 1, 1, 1], padding='SAME')
+            res = tf.nn.conv2d(input=tf.concat(axis=3, values=args), filters=matrix, strides=[1, 1, 1, 1], padding='SAME')
         if not bias:
             return res
-        bias_term = tf.get_variable(
+        bias_term = tf.compat.v1.get_variable(
             "Bias", [num_features],
             dtype=dtype,
-            initializer=tf.constant_initializer(
+            initializer=tf.compat.v1.constant_initializer(
                 bias_start, dtype=dtype))
     return res + bias_term
 
@@ -193,18 +193,18 @@ def _conv_linear_extended(args, filter_size, num_features, bias, bias_start=0.0,
     dtype = [a.dtype for a in args][0]
 
     # Now the computation.
-    with tf.variable_scope(scope or "Conv"):
-        matrix = tf.get_variable(
+    with tf.compat.v1.variable_scope(scope or "Conv"):
+        matrix = tf.compat.v1.get_variable(
             "Matrix", [filter_size[0], filter_size[1], total_arg_size_depth, num_features], dtype=dtype)
         if len(args) == 1:
-            res = tf.nn.conv2d(args[0], matrix, strides=[1, strides_out, strides_out, 1], padding=padding_type)
+            res = tf.nn.conv2d(input=args[0], filters=matrix, strides=[1, strides_out, strides_out, 1], padding=padding_type)
         else:
-            res = tf.nn.conv2d(tf.concat(args, 3), matrix, strides=[1, strides_out, strides_out, 1], padding=padding_type)
+            res = tf.nn.conv2d(input=tf.concat(args, 3), filters=matrix, strides=[1, strides_out, strides_out, 1], padding=padding_type)
         if not bias:
             return res
-        bias_term = tf.get_variable(
+        bias_term = tf.compat.v1.get_variable(
             "Bias", [num_features],
             dtype=dtype,
-            initializer=tf.constant_initializer(
+            initializer=tf.compat.v1.constant_initializer(
                 bias_start, dtype=dtype))
     return res + bias_term

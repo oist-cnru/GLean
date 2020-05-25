@@ -1,14 +1,11 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-import __builtin__
+import builtins
 import numpy as np
 import tensorflow as tf
 from tensorflow.core.protobuf import rewriter_config_pb2
 import time
 import sys
 import os
-import ConfigParser
+import configparser
 import argparse
 
 from model import PVRNN
@@ -16,11 +13,11 @@ import ops
 
 # Override default print
 def print(*args, **kwargs):
-    __builtin__.print(sys.argv[0][:-3], end = ": ")
-    return __builtin__.print(*args, **kwargs)
+    builtins.print(sys.argv[0][:-3], end = ": ")
+    return builtins.print(*args, **kwargs)
 
 def xprint(*args, **kwargs):
-    return __builtin__.print(*args, **kwargs)
+    return builtins.print(*args, **kwargs)
 
 NUM_CPU = 4
 NUM_GPU = 0
@@ -29,7 +26,7 @@ os.environ["KMP_BLOCKTIME"] = "0"
 os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
 os.environ["KMP_SETTINGS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
-tf_config = tf.ConfigProto(allow_soft_placement=True, intra_op_parallelism_threads=NUM_CPU, inter_op_parallelism_threads=NUM_CPU, device_count={"GPU": NUM_GPU, "CPU": NUM_CPU}) # use CPU only
+tf_config = tf.compat.v1.ConfigProto(allow_soft_placement=True, intra_op_parallelism_threads=NUM_CPU, inter_op_parallelism_threads=NUM_CPU, device_count={"GPU": NUM_GPU, "CPU": NUM_CPU}) # use CPU only
 # tf_config = tf.ConfigProto()
 tf_config.graph_options.rewrite_options.memory_optimization = rewriter_config_pb2.RewriterConfig.OFF # workaround TF bug
 # tf_config.gpu_options.allow_growth = True
@@ -77,7 +74,7 @@ override_posterior_src_range = None
 if len(sys.argv) > 1:
     if sys.argv[1] != "-h" and sys.argv[1] != "--help":
         config_file = sys.argv[1]
-        config = ConfigParser.ConfigParser()
+        config = configparser.ConfigParser()
         if len(config.read(config_file)) == 0:
             print("Failed to read config file " + config_file)
             exit(1)
@@ -217,18 +214,18 @@ elif "opt_epsilon" in config_network:
 else:
     er_opt_epsilon = er_learning_rate/10.0 # safe default?
 
-with tf.Session(config = tf_config) as sess:
+with tf.compat.v1.Session(config = tf_config) as sess:
     rnn = PVRNN(sess, config_data, config_network, learning_rate=er_learning_rate, optimizer_epsilon=er_opt_epsilon, hybrid_posterior_src=override_posterior_src_range, planning=config_planning, reset_posterior_src=True, overrides=plan_overrides)
 
     print("Load model")
-    tf.global_variables_initializer().run()
+    tf.compat.v1.global_variables_initializer().run()
     epoch = rnn.load(training_path, ckpt_name=training_load_checkpoint)
     if epoch == -1:
         print("Trained model required for planning!")
         exit(255)
 
-    sum_op = tf.summary.merge_all()
-    writer = tf.summary.FileWriter(training_path + "/er_logs", rnn.sess.graph)
+    sum_op = tf.compat.v1.summary.merge_all()
+    writer = tf.compat.v1.summary.FileWriter(training_path + "/er_logs", rnn.sess.graph)
 
     best_loss = sys.float_info.max
     best_loss_epo = -1
@@ -284,7 +281,7 @@ with tf.Session(config = tf_config) as sess:
         candidate_plan_loss = []
     print("Beginning iterations")
     start_time = time.time()
-    for epoch in xrange(er_start_epoch, er_max_epoch):
+    for epoch in range(er_start_epoch, er_max_epoch):
         # Gradients debug
         # model_epoch.append(rnn.build_model["gradients"])
         # model_epoch_lut["gradients"] = model_epoch_idx; model_epoch_idx += 1

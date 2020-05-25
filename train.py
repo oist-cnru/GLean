@@ -1,13 +1,10 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-import __builtin__
+import builtins
 import numpy as np
 import tensorflow as tf
 import time
 import sys
 import os
-import ConfigParser
+import configparser
 import argparse
 
 from model import PVRNN
@@ -15,11 +12,11 @@ import ops
 
 # Override default print
 def print(*args, **kwargs):
-    __builtin__.print(sys.argv[0][:-3], end = ": ")
-    return __builtin__.print(*args, **kwargs)
+    builtins.print(sys.argv[0][:-3], end = ": ")
+    return builtins.print(*args, **kwargs)
 
 def xprint(*args, **kwargs):
-    return __builtin__.print(*args, **kwargs)
+    return builtins.print(*args, **kwargs)
 
 NUM_CPU = 4
 NUM_GPU = 0
@@ -28,7 +25,7 @@ os.environ["KMP_BLOCKTIME"] = "0"
 os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
 os.environ["KMP_SETTINGS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
-tf_config = tf.ConfigProto(allow_soft_placement=True, intra_op_parallelism_threads=NUM_CPU, inter_op_parallelism_threads=NUM_CPU, device_count={"GPU": NUM_GPU, "CPU": NUM_CPU}) # use CPU only
+tf_config = tf.compat.v1.ConfigProto(allow_soft_placement=True, intra_op_parallelism_threads=NUM_CPU, inter_op_parallelism_threads=NUM_CPU, device_count={"GPU": NUM_GPU, "CPU": NUM_CPU}) # use CPU only
 # tf_config = tf.ConfigProto()
 # tf_config.gpu_options.allow_growth = True
 # tf_config.graph_options.rewrite_options.auto_mixed_precision = True # enable FP16/FP32 auto optimization for Volta+ GPUs (requires TF version >=1.14)
@@ -67,7 +64,7 @@ override_posterior_src_range = None
 if len(sys.argv) > 1:
     if sys.argv[1] != "-h" and sys.argv[1] != "--help":
         config_file = sys.argv[1]
-        config = ConfigParser.ConfigParser()
+        config = configparser.ConfigParser()
         if len(config.read(config_file)) == 0:
             print("Failed to read config file " + config_file)
             exit(1)
@@ -185,18 +182,18 @@ if "opt_epsilon" in config_network:
 else:
     training_opt_epsilon = training_learning_rate/10.0 # safe default?
 
-with tf.Session(config = tf_config) as sess:
+with tf.compat.v1.Session(config = tf_config) as sess:
     rnn = PVRNN(sess, config_data, config_network, learning_rate=training_learning_rate, optimizer_epsilon=training_opt_epsilon, hybrid_posterior_src=override_posterior_src_range, overrides=plan_overrides, data_masking=False)
 
     print("Start training")
-    tf.global_variables_initializer().run()
+    tf.compat.v1.global_variables_initializer().run()
     if training_load:
         training_start_epoch = rnn.load(training_path, ckpt_name=training_load_checkpoint)
         if training_start_epoch < 0:
             training_start_epoch = 0
 
-    sum_op = tf.summary.merge_all()
-    writer = tf.summary.FileWriter(training_path + "/logs", rnn.sess.graph)
+    sum_op = tf.compat.v1.summary.merge_all()
+    writer = tf.compat.v1.summary.FileWriter(training_path + "/logs", rnn.sess.graph)
 
     ## Build a list of tensors we want evaluated
     model_epoch = []
@@ -231,7 +228,7 @@ with tf.Session(config = tf_config) as sess:
     print("Beginning iterations")
     start_time = time.time()
 
-    for epoch in xrange(training_start_epoch, training_max_epoch):
+    for epoch in range(training_start_epoch, training_max_epoch):
         # Evaluate for this epoch
         model_epoch_output = sess.run(model_epoch)
 

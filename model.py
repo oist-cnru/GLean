@@ -1,6 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 import functools
@@ -177,13 +174,13 @@ class PVRNN(object):
             if m + "_layers_param" in config_network:
                 self.layers_params[m] = [float(x.strip()) for x in config_network[m + "_layers_param"].split(',')]
             else:
-                self.layers_params[m] = [float(2**(i+1)) for i in xrange(len(self.d_neurons[m]))]
+                self.layers_params[m] = [float(2**(i+1)) for i in range(len(self.d_neurons[m]))]
                 print("model: Using default layer parameters " + str(self.layers_params[m]))
             # Append layer 0
             self.d_neurons[m].insert(0, (self.dims[m] * self.softmax_quant))
             self.z_units[m].insert(0, 0)
-            self.layers[m] = [None for _ in xrange(len(self.d_neurons[m]))] # Layer 0 is for output, no cells
-            self.layers_names[m] = ["l" + str(l) + "_" + m for l in xrange(len(self.d_neurons[m]))]
+            self.layers[m] = [None for _ in range(len(self.d_neurons[m]))] # Layer 0 is for output, no cells
+            self.layers_names[m] = ["l" + str(l) + "_" + m for l in range(len(self.d_neurons[m]))]
             self.n_layers[m] = len(self.layers[m]) # including I/O
 
         # Assume only the top layer might be shared
@@ -215,7 +212,7 @@ class PVRNN(object):
         self.vb_new_meta_prior_loss = True # use new loss calculation
         self.vb_return_full_loss = config_network.get("return_full_loss", False) # returns loss per timestep per sequence (true or false, not text)
         self.vb_per_t_meta_prior = False # apply W at loss calculation per timestep (always true when vb_ugaussian is used)
-        self.vb_zero_initial_out = True # set to true to zero output from deterministic network at t = 0, set to false to allow d0 to shift (not recommended)
+        self.vb_zero_initial_out = True # set to true for d=0 at t=0
         self.vb_reset_posterior = reset_posterior_src # reset the posterior's trained input, use in planning
         self.vb_prior_output = prior_generation # use either prior or posterior in calculating output
         self.vb_posterior_past_input = True if config_network.get("connect_posterior_dz", "false").lower() == "true" else False # set to true to include d_{t-1} in posterior calculation
@@ -291,8 +288,8 @@ class PVRNN(object):
             self.z_activation_func[m] = self.activation_func[m]
 
             # Layer 1+
-            for i in xrange(1,self.n_layers[m]):
-                with tf.variable_scope(self.layers_names[m][i]):
+            for i in range(1,self.n_layers[m]):
+                with tf.compat.v1.variable_scope(self.layers_names[m][i]):
                     # Supported celltypes: LSTM and MTRNN (default)
                     if m + "_celltype" in config_network:
                         if config_network[m + "_celltype"].lower() == "lstm":
@@ -374,11 +371,13 @@ class PVRNN(object):
         batch = dict()
 
         for m in self.modalities:
-            data_tensors[m] = tf.convert_to_tensor(data_raw[m], dtype=tf.float32)  # [seq, step, dim*quant_level]
+            data_tensors[m] = tf.convert_to_tensor(value=data_raw[m], dtype=tf.float32, name="load_data_tensors")  # [seq, step, dim*quant_level]
             data_dataset[m] = tf.data.Dataset.from_tensor_slices(data_tensors[m])
         
-        data_shape = np.shape(data_raw.itervalues().next())
-        # Override predefined number of sequences with real value
+        data_shape = np.shape(next(iter(data_raw.values())))
+        # Override defined number of sequences with real value
+        if self.n_seq == self.batch_size or data_shape[0] < self.batch_size:
+            self.batch_size = data_shape[0] # update batch size
         self.n_seq = data_shape[0]
         if self.n_seq < self.batch_size:
             self.batch_size = data_shape[0] # fix batch size
@@ -387,8 +386,8 @@ class PVRNN(object):
         self.max_timesteps = data_shape[1]
 
         # Build index
-        idxs = [[j for _ in xrange(self.max_timesteps)] for j in xrange(self.n_seq)]
-        idx_tensors = tf.convert_to_tensor(idxs, dtype=tf.int32)
+        idxs = [[j for _ in range(self.max_timesteps)] for j in range(self.n_seq)]
+        idx_tensors = tf.convert_to_tensor(value=idxs, dtype=tf.int32, name="load_idx_tensors")
         idx_dataset = tf.data.Dataset.from_tensor_slices(idx_tensors)
 
         # Batching
@@ -400,22 +399,16 @@ class PVRNN(object):
         if self.training and not self.planning:
             dataset = dataset.shuffle(buffer_size=10000)
         dataset = dataset.repeat()
-
-        # Handle old TensorFlow missing drop_remainder
-        if parse_version(tf.__version__) > parse_version("1.4.1"):
-            dataset = dataset.batch(self.batch_size, drop_remainder=True)
-        else:
-            dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(self.batch_size))
-
+        dataset = dataset.batch(self.batch_size, drop_remainder=True)
         dataset = dataset.prefetch(buffer_size=self.n_seq//self.batch_size)
-        iterator = dataset.make_one_shot_iterator()
+        iterator = tf.compat.v1.data.make_one_shot_iterator(dataset)
 
         batch = iterator.get_next()
 
         out = dict()
         out["idx_data"] = idx_tensors
         out["idx_next"] = batch[0]
-        for i in xrange(len(self.modalities)):
+        for i in range(len(self.modalities)):
             out[self.modalities[i] + "_data"] = data_tensors[self.modalities[i]]
             out[self.modalities[i] + "_next"] = batch[i+1]
         out["timesteps"] = self.max_timesteps
@@ -435,24 +428,24 @@ class PVRNN(object):
             data_mask_rec = ops.data_mask(data[self.modalities[0] + "_next"], skip_ahead=1)
 
         ## Initialize initial states for all network units
-        with tf.variable_scope('initial_state', reuse=tf.AUTO_REUSE):
+        with tf.compat.v1.variable_scope('initial_state', reuse=tf.compat.v1.AUTO_REUSE):
             init_data = data if self.input_provide_data else None
             initial_states = ops.set_trainable_initial_states(self.modalities, init_data, self.batch_size, self.d_neurons, self.z_units)
 
         ## Train model
-        with tf.variable_scope("training"):
+        with tf.compat.v1.variable_scope("training"):
             data_next = []
-            data_next.append(tf.transpose(data["idx_next"], [1, 0]))
+            data_next.append(tf.transpose(a=data["idx_next"], perm=[1, 0], name="transpose_idx_next"))
             if self.input_provide_data:
                 for m in self.modalities:
-                    data_next.append(tf.transpose(data[m + "_next"], [1, 0, 2])) # step, batch, dim
+                    data_next.append(tf.transpose(a=data[m + "_next"], perm=[1, 0, 2], name="transpose_data_next")) # step, batch, dim
             step_data = tuple(data_next)
 
             # Run one epoch, all timesteps
             output_model = functional_ops.scan(self.build_model_one_step_scan, step_data, initializer=initial_states, parallel_iterations=self.batch_size)
 
             # Collect output (dicts)
-            generated_out = {m: tf.transpose(output_model["out"][m][0], [1, 0, 2]) for m in self.modalities} # output layer 0: seq, step, dim
+            generated_out = {m: tf.transpose(a=output_model["out"][m][0], perm=[1, 0, 2], name="transpose_generated_out") for m in self.modalities} # output layer 0: seq, step, dim
             generated_z_prior = dict()
             generated_z_prior_mean = dict()
             generated_z_prior_var = dict()
@@ -462,31 +455,31 @@ class PVRNN(object):
             generated_z_posterior_src = dict()
             for m in self.modalities:
                 if max(self.vb_meta_prior[m]) >= 0:
-                    generated_z_prior[m] = [tf.transpose(output_model["z_prior"][m][i], [1, 0, 2]) for i in xrange(len(output_model["z_prior"][m]))]
-                    generated_z_prior_mean[m] = [tf.transpose(output_model["z_prior_mean"][m][i], [1, 0, 2]) for i in xrange(len(output_model["z_prior_mean"][m]))]
-                    generated_z_prior_var[m] = [tf.transpose(output_model["z_prior_var"][m][i], [1, 0, 2]) for i in xrange(len(output_model["z_prior_var"][m]))]
-                    generated_z_posterior[m] = [tf.transpose(output_model["z_posterior"][m][i], [1, 0, 2]) for i in xrange(len(output_model["z_posterior"][m]))]
-                    generated_z_posterior_mean[m] = [tf.transpose(output_model["z_posterior_mean"][m][i], [1, 0, 2]) for i in xrange(len(output_model["z_posterior_mean"][m]))]
-                    generated_z_posterior_var[m] = [tf.transpose(output_model["z_posterior_var"][m][i], [1, 0, 2]) for i in xrange(len(output_model["z_posterior_var"][m]))]
+                    generated_z_prior[m] = [tf.transpose(a=output_model["z_prior"][m][i], perm=[1, 0, 2], name="transpose_generated_z_p") for i in range(len(output_model["z_prior"][m]))]
+                    generated_z_prior_mean[m] = [tf.transpose(a=output_model["z_prior_mean"][m][i], perm=[1, 0, 2], name="transpose_generated_zm_p") for i in range(len(output_model["z_prior_mean"][m]))]
+                    generated_z_prior_var[m] = [tf.transpose(a=output_model["z_prior_var"][m][i], perm=[1, 0, 2], name="transpose_generated_zv_p") for i in range(len(output_model["z_prior_var"][m]))]
+                    generated_z_posterior[m] = [tf.transpose(a=output_model["z_posterior"][m][i], perm=[1, 0, 2], name="transpose_generated_z_q") for i in range(len(output_model["z_posterior"][m]))]
+                    generated_z_posterior_mean[m] = [tf.transpose(a=output_model["z_posterior_mean"][m][i], perm=[1, 0, 2], name="transpose_generated_zm_q") for i in range(len(output_model["z_posterior_mean"][m]))]
+                    generated_z_posterior_var[m] = [tf.transpose(a=output_model["z_posterior_var"][m][i], perm=[1, 0, 2], name="transpose_generated_zv_q") for i in range(len(output_model["z_posterior_var"][m]))]
 
                     if any(self.vb_seq_prior[m]):
-                        with tf.variable_scope("model_variables", reuse=True):
+                        with tf.compat.v1.variable_scope("model_variables", reuse=True):
                             src_z = max(self.z_units[m]) if self.vb_posterior_src_extend else max(self.z_units[m])*2
                             if not self.vb_hybrid_posterior_src:
                                 if not self.vb_reset_posterior:
                                     z_posterior_src_var_name = m + "_z_posterior_src"
                                 else:
                                     z_posterior_src_var_name = m + "_z_posterior_src_zero"
-                                generated_z_posterior_src[m] = tf.get_variable(z_posterior_src_var_name, shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z])
+                                generated_z_posterior_src[m] = tf.compat.v1.get_variable(z_posterior_src_var_name, shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z])
                             else:
-                                trained_src = tf.get_variable(m + "_z_posterior_src", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z])
-                                zero_src = tf.get_variable(m + "_z_posterior_src_zero", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z])
+                                trained_src = tf.compat.v1.get_variable(m + "_z_posterior_src", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z])
+                                zero_src = tf.compat.v1.get_variable(m + "_z_posterior_src_zero", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z])
                                 initial_start = self.vb_hybrid_posterior_src_range[0]
                                 initial_end = self.vb_hybrid_posterior_src_range[1]
                                 if not self.vb_hybrid_posterior_src_zero_init:
-                                    generated_z_posterior_src[m] = tf.concat([trained_src[initial_start:initial_end, :, :, :], zero_src[initial_end:, :, :, :]], axis=0)
+                                    generated_z_posterior_src[m] = tf.concat([trained_src[initial_start:initial_end, :, :, :], zero_src[initial_end:, :, :, :]], axis=0, name="concat_hybrid_src_tz")
                                 else:
-                                    generated_z_posterior_src[m] = tf.concat([zero_src[initial_start:initial_end, :, :, :], trained_src[initial_end:, :, :, :]], axis=0)
+                                    generated_z_posterior_src[m] = tf.concat([zero_src[initial_start:initial_end, :, :, :], trained_src[initial_end:, :, :, :]], axis=0, name="concat_hybrid_src_zt")
 
         ## Calculate loss per modality
         batch_reconstruction_loss = dict.fromkeys(self.modalities, tf.constant(0.0))
@@ -538,8 +531,8 @@ class PVRNN(object):
                     if self.planning_auto_weight > 0:
                         error_weight = (self.max_timesteps * self.planning_auto_weight) / error_weight
                     if self.planning_goal_modalities_mask is not None:
-                        dmask1 = [1 if d >= plan_mask_start and d < plan_mask_end else 0 for d in xrange(self.dims[m]*self.softmax_quant)]
-                        planning_mask = ops.windowed_dmask(dmask1, [self.batch_size, self.max_timesteps, self.dims[m]*self.softmax_quant], start=[plan_iframe_start, plan_iframe_end], end=[plan_gframe_start, plan_gframe_end], end_zeropad=(not self.planning_goal_padding))
+                        dmask1 = [1 if d >= plan_mask_start and d < plan_mask_end else 0 for d in range(self.dims[m]*self.softmax_quant)]
+                        planning_mask = ops.windowed_dmask(dmask1, [self.n_seq, self.max_timesteps, self.dims[m]*self.softmax_quant], start=[plan_iframe_start, plan_iframe_end], end=[plan_gframe_start, plan_gframe_end], end_zeropad=(not self.planning_goal_padding))
                         rec_loss = ops.kld_with_mask(data[m + "_next"][:, :, :], generated_out[m][:, :data["timesteps"], :], dmask=planning_mask)
                         batch_reconstruction_loss[m] = rec_loss # (reduced, all sequences)
                         error_weight += 1.0
@@ -566,7 +559,7 @@ class PVRNN(object):
         total_batch_regularization_loss = tf.constant(0.0)
         # Find least loss for planner
         if self.planning:
-            full_batch_reconstruction_loss = tf.zeros(tf.shape(batch_reconstruction_loss[m][1])[0])
+            full_batch_reconstruction_loss = tf.zeros(tf.shape(input=batch_reconstruction_loss[m][1])[0])
             full_batch_regularization_loss = tf.zeros_like(full_batch_reconstruction_loss)
             full_batch_loss = tf.zeros_like(full_batch_reconstruction_loss)
         for m in self.modalities:
@@ -574,12 +567,12 @@ class PVRNN(object):
             rec_loss = batch_reconstruction_loss[m][0]
             total_batch_reconstruction_loss += rec_loss
             if self.planning:
-                rec_loss_seq = tf.reduce_sum(batch_reconstruction_loss[m][1], 1)
+                rec_loss_seq = tf.reduce_sum(input_tensor=batch_reconstruction_loss[m][1], axis=1, name="reduce_recloss")
                 full_batch_reconstruction_loss += rec_loss_seq
             # Regularization loss
             if self.vb_meta_prior[m][0] != -1:
                 zs = len(self.z_units[m])-1
-                for i in xrange(1, zs+1):
+                for i in range(1, zs+1):
                     reg_loss = batch_regularization_loss[m][i][0]
                     total_batch_regularization_loss += reg_loss
                     if self.vb_ugaussian_t_range is not None or self.vb_per_t_meta_prior: # W is applied in KLD calculation
@@ -592,8 +585,8 @@ class PVRNN(object):
                             total_batch_loss += ((1.0 - W) * (rec_loss/zs)) - (W * reg_loss)
                 
                 if self.planning:
-                    for i in xrange(1, zs+1):
-                        reg_loss_seq = tf.reduce_sum(batch_regularization_loss[m][i][1], 1)
+                    for i in range(1, zs+1):
+                        reg_loss_seq = tf.reduce_sum(input_tensor=batch_regularization_loss[m][i][1], axis=1, name="reduce_regloss")
                         full_batch_regularization_loss += reg_loss_seq
                         if self.vb_ugaussian_t_range is not None or self.vb_per_t_meta_prior: # W is applied in KLD calculation
                             full_batch_loss += rec_loss_seq/zs - reg_loss_seq
@@ -608,13 +601,13 @@ class PVRNN(object):
 
             # Select least loss as recommended plan
             if self.planning:            
-                selected_loss_idx = tf.argmin(full_batch_loss)
+                selected_loss_idx = tf.argmin(input=full_batch_loss, name="argmin_full_loss")
                 selected_loss = full_batch_loss[selected_loss_idx]
                 selected_loss_rec = full_batch_reconstruction_loss[selected_loss_idx]
                 selected_loss_reg = full_batch_regularization_loss[selected_loss_idx]
 
         ## Run optimizer (backprop)
-        self.model_train_var = tf.trainable_variables()
+        self.model_train_var = tf.compat.v1.trainable_variables()
         if self.training and not self.planning:
             deselect_var_name = ["training/model_variables/" + m + "_z_posterior_src_zero:0" for m in self.modalities] # don't train src_zero here
             opt_train_var = [var for var in self.model_train_var if var.name not in deselect_var_name]
@@ -645,51 +638,51 @@ class PVRNN(object):
         else:
             print("None")
 
-        # Supported optimizers: ADAM (default), Gradient descent, Momentum, Adagrad, RMSProp
-        if self.optimizer_func == "gradient_descent":
-            optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
-        elif self.optimizer_func == "momentum":
-            optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate, momentum=0.9, use_nesterov=True)
-        elif self.optimizer_func == "adagrad":
-            optimizer = tf.train.AdagradOptimizer(learning_rate=self.learning_rate)
-        elif self.optimizer_func == "rmsprop":
-            optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate, epsilon=self.optimizer_epsilon)#, decay=0.1)#, momentum=0.5)
-        elif self.optimizer_func == "rmsprop_momentum":
-            optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate, epsilon=self.optimizer_epsilon, momentum=0.5, centered=True)
-        elif self.optimizer_func == "adam":
-            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate, epsilon=self.optimizer_epsilon)
-
         if self.training:
-            gradients, variables = zip(*optimizer.compute_gradients(total_batch_loss, var_list=opt_train_var))
+            # Supported optimizers: ADAM (default), Gradient descent, Momentum, Adagrad, RMSProp
+            if self.optimizer_func == "gradient_descent":
+                optimizer = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
+            elif self.optimizer_func == "momentum":
+                optimizer = tf.compat.v1.train.MomentumOptimizer(learning_rate=self.learning_rate, momentum=0.9, use_nesterov=True)
+            elif self.optimizer_func == "adagrad":
+                optimizer = tf.compat.v1.train.AdagradOptimizer(learning_rate=self.learning_rate)
+            elif self.optimizer_func == "rmsprop":
+                optimizer = tf.compat.v1.train.RMSPropOptimizer(learning_rate=self.learning_rate, epsilon=self.optimizer_epsilon)#, decay=0.1)#, momentum=0.5)
+            elif self.optimizer_func == "rmsprop_momentum":
+                optimizer = tf.compat.v1.train.RMSPropOptimizer(learning_rate=self.learning_rate, epsilon=self.optimizer_epsilon, momentum=0.5, centered=True)
+            elif self.optimizer_func == "adam":
+                optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.learning_rate, epsilon=self.optimizer_epsilon)
+            gradients, variables = list(zip(*optimizer.compute_gradients(total_batch_loss, var_list=opt_train_var)))
             if self.gradient_clip > 0:
-                pruned_gradients = [tf.where(tf.is_nan(grad), tf.zeros_like(grad), grad) if grad is not None else None for grad in gradients]
-                pruned_gradients = [tf.where(tf.is_inf(grad), tf.constant(self.gradient_clip, shape=np.shape(grad)), grad) if grad is not None else None for grad in pruned_gradients]
+                pruned_gradients = [tf.compat.v1.where(tf.math.is_nan(grad), tf.zeros_like(grad), grad) if grad is not None else None for grad in gradients]
+                pruned_gradients = [tf.compat.v1.where(tf.math.is_inf(grad), tf.constant(self.gradient_clip, shape=np.shape(grad)), grad) if grad is not None else None for grad in pruned_gradients]
                 clipped_gradients, _ = tf.clip_by_global_norm(pruned_gradients, self.gradient_clip)
-                training_batch = optimizer.apply_gradients(zip(clipped_gradients, variables))
+                training_batch = optimizer.apply_gradients(list(zip(clipped_gradients, variables)))
             else:
-                training_batch = optimizer.apply_gradients(zip(gradients, variables))
+                training_batch = optimizer.apply_gradients(list(zip(gradients, variables)))
         else:
+            optimizer = None
             training_batch = None
 
         ## Save model summary
-        with tf.name_scope("loss"):
+        with tf.compat.v1.name_scope("loss"):
             for m in self.modalities:
                 rec_loss = batch_reconstruction_loss[m][0]
-                tf.summary.scalar(m + "_batch_reconstruction_loss", rec_loss / data["timesteps"])
+                tf.compat.v1.summary.scalar(m + "_batch_reconstruction_loss", rec_loss / data["timesteps"])
                 if self.vb_meta_prior[m][0] != -1 and self.training:
-                    for i in xrange(1, len(self.z_units[m])):
+                    for i in range(1, len(self.z_units[m])):
                         reg_loss = batch_regularization_loss[m][i][0]
-                        tf.summary.scalar(m + "_z" + str(i) + "_batch_regularization_loss", -reg_loss / data["timesteps"])
-            tf.summary.scalar("total_batch_loss", total_batch_loss / data["timesteps"])
+                        tf.compat.v1.summary.scalar(m + "_z" + str(i) + "_batch_regularization_loss", -reg_loss / data["timesteps"])
+            tf.compat.v1.summary.scalar("total_batch_loss", total_batch_loss / data["timesteps"])
 
-        self.saver = tf.train.Saver(var_list=self.model_train_var, max_to_keep=None)
+        self.saver = tf.compat.v1.train.Saver(var_list=self.model_train_var, max_to_keep=None)
 
         ## Output the model
         model = dict()
         model["data"] = data
         model["data_length"] = data["timesteps"]
-        model["generated_out"] = {m: [tf.transpose(output_model["out"][m][i], [1, 0, 2]) for i in xrange(len(output_model["out"][m]))] for m in self.modalities}
-        model["initial"] = {m: [tf.transpose(output_model["out_initial"][m][i], [1, 0, 2]) for i in xrange(len(output_model["out_initial"][m]))] for m in self.modalities}
+        model["generated_out"] = {m: [tf.transpose(a=output_model["out"][m][i], perm=[1, 0, 2], name="transpose_generated_out_all") for i in range(len(output_model["out"][m]))] for m in self.modalities}
+        model["initial"] = {m: [tf.transpose(a=output_model["out_initial"][m][i], perm=[1, 0, 2], name="transpose_initial") for i in range(len(output_model["out_initial"][m]))] for m in self.modalities}
         model["generated_z_prior_mean"] = generated_z_prior_mean
         model["generated_z_prior_var"] = generated_z_prior_var
         model["generated_z_prior"] = generated_z_prior
@@ -716,7 +709,7 @@ class PVRNN(object):
     # build_model #
 
     def build_model_one_step_scan(self, previous_states, current_input):
-        with tf.variable_scope('model_variables', reuse=tf.AUTO_REUSE):
+        with tf.compat.v1.variable_scope('model_variables', reuse=tf.compat.v1.AUTO_REUSE):
             return self.build_model_one_step(previous_states, current_input)
 
     def calculate_z_prior(self, idx_layer, out, modality, scope=None, override_l=None, override_sigma=None, override_myu=None, override_epsilon=None):
@@ -750,7 +743,7 @@ class PVRNN(object):
             idx_seq = tf.constant(self.vb_hybrid_posterior_src_idx_override)
         t_step = previous_states["t_step"]
 
-        out_initial = {m: self.n_layers[m]*[None] for m in self.modalities}
+        out_initial = previous_states["out_initial"]
         out = {m: self.n_layers[m]*[None] for m in self.modalities}
         state = {m: self.n_layers[m]*[None] for m in self.modalities}
         z_prior_mean = {m: self.n_layers[m]*[None] for m in self.modalities}
@@ -762,22 +755,17 @@ class PVRNN(object):
 
         if self.override_d_output is not None:
             for m in self.modalities:
-                for i in xrange(max(self.n_layers.values())-1, 0, -1):
-                    fixed_d = tf.reshape(tf.tile(tf.gather(tf.convert_to_tensor(self.override_d_output[m][i]), t_step), [self.batch_size]), [self.batch_size, self.d_neurons[m][i]])
-                    previous_states["out"][m][i] = tf.where(tf.logical_and(tf.greater_equal(t_step, self.override_d_output_range[0]), tf.less(t_step, self.override_d_output_range[1])), fixed_d, previous_states["out"][m][i])
+                for i in range(max(self.n_layers.values())-1, 0, -1):
+                    fixed_d = tf.reshape(tf.tile(tf.gather(tf.convert_to_tensor(value=self.override_d_output[m][i], name="load_override_d"), t_step), [self.n_seq]), [self.n_seq, self.d_neurons[m][i]])
+                    previous_states["out"][m][i] = tf.compat.v1.where(tf.logical_and(tf.greater_equal(t_step, self.override_d_output_range[0]), tf.less(t_step, self.override_d_output_range[1])), fixed_d, previous_states["out"][m][i], name="where_override_d_range")
 
-        for m in self.modalities:
-            # Zero out initial value
-            if self.vb_zero_initial_out:
-                out_initial[m] = previous_states["out_initial"][m]
-            else:
-                out_initial_var = tf.get_variable(m + "_out_initial", shape=[1], initializer=tf.zeros_initializer, trainable=self.training) # TODO: reuse for continued generation?
-                out_initial[m] = []
-                for l in xrange(self.n_layers[m]):
-                    out_initial[m].append(tf.fill([self.batch_size, self.d_neurons[m][l]], out_initial_var[0]))
+        if not self.vb_zero_initial_out:
+            for m in self.modalities:
+                out_initial_var = tf.compat.v1.get_variable(m + "_out_initial", shape=[1], initializer=tf.compat.v1.zeros_initializer, trainable=self.training) # TODO: reuse for continued generation?
+                previous_states["out"][m] = tf.compat.v1.where(tf.equal(t_step, 0), out_initial_var, previous_states["out"][m], name="where_initial_d_check")
 
         # Layers 1+
-        for i in xrange(max(self.n_layers.values())-1, 0, -1):
+        for i in range(max(self.n_layers.values())-1, 0, -1):
             current_z_logits = {m: None for m in self.modalities}
             higher_level_out_logits = {m: None for m in self.modalities}
             lower_level_out_logits = {m: None for m in self.modalities}
@@ -793,44 +781,44 @@ class PVRNN(object):
                 # Input from lower levels
                 if i != 1 and self.connect_bottomup_d:
                     # ll input from this modality
-                    lower_level_out = tf.where(tf.equal(t_step, 0), out_initial[m][i-1], previous_states["out"][m][i-1])
+                    lower_level_out = previous_states["out"][m][i-1]
                     # If this is a shared layer, gather ll input from all modalities
                     if i == self.n_layers[m]-1 and self.shared_layer == m:
                         for x in self.modalities:
                             if x == m:
                                 continue
                             else:
-                                lower_level_xout = tf.where(tf.equal(t_step, 0), out_initial[x][i-1], previous_states["out"][x][i-1])
+                                lower_level_xout = previous_states["out"][x][i-1]
                                 if self.layers_concat_input:
-                                    lower_level_out = tf.concat([lower_level_out, lower_level_xout], axis=1)
+                                    lower_level_out = tf.concat([lower_level_out, lower_level_xout], axis=1, name="concat_ll_out")
                                 else:
-                                    lower_level_out = tf.add_n([lower_level_out, lower_level_xout])
+                                    lower_level_out = tf.add_n([lower_level_out, lower_level_xout], name="addn_ll_out")
                 else: # lowest level
                     if self.input_provide_data:
-                        lower_level_out = tf.where(tf.equal(t_step, 0), out_initial[m][0], tf.add(self.input_cl_ratio * previous_states["out"][m][0], (1.0 - self.input_cl_ratio) * current_input[mi+1])) # Mix input and previous output
+                        lower_level_out = tf.add(self.input_cl_ratio * previous_states["out"][m][0], (1.0 - self.input_cl_ratio) * current_input[mi+1], name="add_ll_inmix") # Mix input and previous output
                     # else nothing enters the lowest level
                 
                 # Input from higher levels
                 if i < self.n_layers[m]-1 and self.connect_topdown_d:
                     # hl input from this modality
                     if not self.connect_topdown_dt:
-                        higher_level_out = tf.where(tf.equal(t_step, 0), out_initial[m][i+1], previous_states["out"][m][i+1])
+                        higher_level_out = previous_states["out"][m][i+1]
                     else:
                         higher_level_out = out[m][i+1]
                     if i == max(self.n_layers.values())-2 and self.shared_layer is not None and m != self.shared_layer: # top layer-1
                         if not self.connect_topdown_dt:
-                            higher_level_xout = tf.where(tf.equal(t_step, 0), out_initial[self.shared_layer][i+1], previous_states["out"][self.shared_layer][i+1])
+                            higher_level_xout = previous_states["out"][self.shared_layer][i+1]
                         else:
                             higher_level_xout = out[self.shared_layer][i+1]
                         if self.layers_concat_input:
-                            higher_level_out = tf.concat([higher_level_out, higher_level_xout], axis=1)
+                            higher_level_out = tf.concat([higher_level_out, higher_level_xout], axis=1, name="concat_hl_out")
                         else:
-                            higher_level_out = tf.add_n([higher_level_out, higher_level_xout])
+                            higher_level_out = tf.add_n([higher_level_out, higher_level_xout], name="addn_hl_out")
 
                 # Input from current level (previous timestep)
-                current_level_out = tf.where(tf.equal(t_step, 0), out_initial[m][i], previous_states["out"][m][i])
+                current_level_out = previous_states["out"][m][i]
 
-                with tf.variable_scope('l' + str(i) + '_' + m):
+                with tf.compat.v1.variable_scope('l' + str(i) + '_' + m):
                     lower_level_out_logits[m] = _linear([lower_level_out], self.d_neurons[m][i], bias=True, scope_here=m+"_ll_to_cell") if lower_level_out is not None else tf.zeros([self.batch_size, self.d_neurons[m][i]])
                     higher_level_out_logits[m] = _linear([higher_level_out], self.d_neurons[m][i], bias=True, scope_here=m+"_hl_to_cell") if higher_level_out is not None else tf.zeros([self.batch_size, self.d_neurons[m][i]])
                     current_level_out_logits[m] = _linear([current_level_out], self.d_neurons[m][i], bias=True, scope_here=m+"_cl_to_cell")
@@ -838,18 +826,18 @@ class PVRNN(object):
                 if self.connect_topdown_dz and i < self.n_layers[m]-1:
                     # Independent of connect_d
                     if not self.connect_topdown_dt:
-                        d_to_z = tf.where(tf.equal(t_step, 0), out_initial[m][i+1], previous_states["out"][m][i+1])
+                        d_to_z = previous_states["out"][m][i+1]
                     else:
                         d_to_z = out[m][i+1]
                     if i == max(self.n_layers.values())-2 and self.shared_layer is not None and m != self.shared_layer: # top layer-1
                         if not self.connect_topdown_dt:
-                            higher_level_xout = tf.where(tf.equal(t_step, 0), out_initial[self.shared_layer][i+1], previous_states["out"][self.shared_layer][i+1])
+                            higher_level_xout = previous_states["out"][self.shared_layer][i+1]
                         else:
                             higher_level_xout = out[self.shared_layer][i+1]
                         if self.layers_concat_input:
-                            d_to_z = tf.concat([higher_level_out, higher_level_xout], axis=1)
+                            d_to_z = tf.concat([higher_level_out, higher_level_xout], axis=1, name="concat_dtoz")
                         else:
-                            d_to_z = tf.add_n([higher_level_out, higher_level_xout])
+                            d_to_z = tf.add_n([higher_level_out, higher_level_xout], name="addn_dtoz")
                 else:
                     d_to_z = current_level_out
 
@@ -859,38 +847,38 @@ class PVRNN(object):
                         if self.vb_prior_override_t_range is None:
                             current_z_prior, current_z_prior_mean, current_z_prior_var = self.calculate_z_prior(i, d_to_z, m, override_l=self.vb_prior_override_l, override_sigma=self.vb_prior_override_sigma, override_myu=self.vb_prior_override_myu, override_epsilon=self.vb_prior_override_epsilon)
                         else:
-                            current_z_prior, current_z_prior_mean, current_z_prior_var = tf.cond(tf.logical_and(tf.greater_equal(t_step, self.vb_prior_override_t_range[0]), tf.less(t_step, self.vb_prior_override_t_range[1])), lambda: self.calculate_z_prior(i, d_to_z, m, override_l=self.vb_prior_override_l, override_sigma=self.vb_prior_override_sigma, override_myu=self.vb_prior_override_myu, override_epsilon=self.vb_prior_override_epsilon), lambda: self.calculate_z_prior(i, d_to_z, m))
+                            current_z_prior, current_z_prior_mean, current_z_prior_var = tf.cond(pred=tf.logical_and(tf.greater_equal(t_step, self.vb_prior_override_t_range[0]), tf.less(t_step, self.vb_prior_override_t_range[1])), true_fn=lambda: self.calculate_z_prior(i, d_to_z, m, override_l=self.vb_prior_override_l, override_sigma=self.vb_prior_override_sigma, override_myu=self.vb_prior_override_myu, override_epsilon=self.vb_prior_override_epsilon), false_fn=lambda: self.calculate_z_prior(i, d_to_z, m), name="cond_z_p_range_t")
                     else:
                         if self.vb_prior_override_t_range is None:
-                            current_z_prior, current_z_prior_mean, current_z_prior_var = tf.cond(tf.logical_and(tf.greater_equal(t_step, self.vb_ugaussian_t_range[0]), tf.less(t_step, self.vb_ugaussian_t_range[1])), lambda: self.calculate_z_prior(i, d_to_z, m, override_l=True, override_sigma=1.0, override_myu=0.0), lambda: self.calculate_z_prior(i, d_to_z, m, override_l=self.vb_prior_override_l, override_sigma=self.vb_prior_override_sigma, override_myu=self.vb_prior_override_myu, override_epsilon=self.vb_prior_override_epsilon))
+                            current_z_prior, current_z_prior_mean, current_z_prior_var = tf.cond(pred=tf.logical_and(tf.greater_equal(t_step, self.vb_ugaussian_t_range[0]), tf.less(t_step, self.vb_ugaussian_t_range[1])), true_fn=lambda: self.calculate_z_prior(i, d_to_z, m, override_l=True, override_sigma=1.0, override_myu=0.0), false_fn=lambda: self.calculate_z_prior(i, d_to_z, m, override_l=self.vb_prior_override_l, override_sigma=self.vb_prior_override_sigma, override_myu=self.vb_prior_override_myu, override_epsilon=self.vb_prior_override_epsilon), name="cond_z_p_range_u")
                         else:
-                            current_z_prior, current_z_prior_mean, current_z_prior_var = tf.cond(tf.logical_and(tf.greater_equal(t_step, self.vb_ugaussian_t_range[0]), tf.less(t_step, self.vb_ugaussian_t_range[1])), lambda: self.calculate_z_prior(i, d_to_z, m, override_l=True, override_sigma=1.0, override_myu=0.0), lambda: tf.cond(tf.logical_and(tf.greater_equal(t_step, self.vb_prior_override_t_range[0]), tf.less(t_step, self.vb_prior_override_t_range[1])), lambda: self.calculate_z_prior(i, d_to_z, m, override_l=self.vb_prior_override_l, override_sigma=self.vb_prior_override_sigma, override_myu=self.vb_prior_override_myu, override_epsilon=self.vb_prior_override_epsilon), lambda: self.calculate_z_prior(i, d_to_z, m)))
+                            current_z_prior, current_z_prior_mean, current_z_prior_var = tf.cond(pred=tf.logical_and(tf.greater_equal(t_step, self.vb_ugaussian_t_range[0]), tf.less(t_step, self.vb_ugaussian_t_range[1])), true_fn=lambda: self.calculate_z_prior(i, d_to_z, m, override_l=True, override_sigma=1.0, override_myu=0.0), false_fn=lambda: tf.cond(pred=tf.logical_and(tf.greater_equal(t_step, self.vb_prior_override_t_range[0]), tf.less(t_step, self.vb_prior_override_t_range[1])), true_fn=lambda: self.calculate_z_prior(i, d_to_z, m, override_l=self.vb_prior_override_l, override_sigma=self.vb_prior_override_sigma, override_myu=self.vb_prior_override_myu, override_epsilon=self.vb_prior_override_epsilon), false_fn=lambda: self.calculate_z_prior(i, d_to_z, m)), name="cond_z_p_range_tu")
                     if self.vb_seq_prior[m][i]:
                         ## Calculate posterior
                         # Load the correct posterior source
                         src_z = max(self.z_units[m]) if self.vb_posterior_src_extend else max(self.z_units[m])*2
                         if not self.vb_hybrid_posterior_src:
-                            _ = tf.get_variable(m + "_z_posterior_src_zero", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.zeros_initializer, trainable=True) # this src is reserved in case we don't want to use the primary
+                            _ = tf.compat.v1.get_variable(m + "_z_posterior_src_zero", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.compat.v1.zeros_initializer, trainable=True) # this src is reserved in case we don't want to use the primary
                             if not self.vb_reset_posterior:
                                 z_posterior_src_var_name = m + "_z_posterior_src"
                             else:
                                 z_posterior_src_var_name = m + "_z_posterior_src_zero"
-                            full_z_posterior_src = tf.get_variable(z_posterior_src_var_name, shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.zeros_initializer, trainable=True)
+                            full_z_posterior_src = tf.compat.v1.get_variable(z_posterior_src_var_name, shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.compat.v1.zeros_initializer, trainable=True)
                         else:
                             initial_start = self.vb_hybrid_posterior_src_range[0]
                             initial_end = self.vb_hybrid_posterior_src_range[1]
-                            alt_z_posterior_src = tf.get_variable(m + "_z_posterior_src_zero", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.zeros_initializer, trainable=True)
-                            z_posterior_src = tf.get_variable(m + "_z_posterior_src", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.zeros_initializer, trainable=True)
+                            alt_z_posterior_src = tf.compat.v1.get_variable(m + "_z_posterior_src_zero", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.compat.v1.zeros_initializer, trainable=True)
+                            z_posterior_src = tf.compat.v1.get_variable(m + "_z_posterior_src", shape=[self.max_timesteps, self.n_layers[m], self.n_seq, src_z], initializer=tf.compat.v1.zeros_initializer, trainable=True)
                             if not self.vb_hybrid_posterior_src_zero_init:
-                                full_z_posterior_src = tf.concat([z_posterior_src[initial_start:initial_end, :, :, :], alt_z_posterior_src[initial_end:, :, :, :]], axis=0)
+                                full_z_posterior_src = tf.concat([z_posterior_src[initial_start:initial_end, :, :, :], alt_z_posterior_src[initial_end:, :, :, :]], axis=0, name="concat_z_qsrc_hybrid0")
                             else:
-                                full_z_posterior_src = tf.concat([alt_z_posterior_src[initial_start:initial_end, :, :, :], z_posterior_src[initial_end:, :, :, :]], axis=0)
-                        z_posterior_src = tf.gather(full_z_posterior_src, t_step)
-                        current_z_posterior_src = tf.gather(z_posterior_src[i], idx_seq) # reorder posterior d of this layer to match data sequences
+                                full_z_posterior_src = tf.concat([alt_z_posterior_src[initial_start:initial_end, :, :, :], z_posterior_src[initial_end:, :, :, :]], axis=0, name="concat_z_qsrc_hybrida")
+                        z_posterior_src = tf.gather(full_z_posterior_src, t_step, name="gather_z_qsrc_t")
+                        current_z_posterior_src = tf.gather(z_posterior_src[i], idx_seq, name="gather_z_qsrc_idx") # reorder posterior d of this layer to match data sequences
                         if self.vb_posterior_override_t_range is None:
                             current_z_posterior, current_z_posterior_mean, current_z_posterior_var = self.calculate_z_posterior(i, d_to_z, current_z_posterior_src, m, override_l=self.vb_posterior_override_l, override_sigma=self.vb_posterior_override_sigma, override_myu=self.vb_posterior_override_myu, override_epsilon=self.vb_posterior_override_epsilon)
                         else:
-                            current_z_posterior, current_z_posterior_mean, current_z_posterior_var = tf.cond(tf.logical_and(tf.greater_equal(t_step, self.vb_posterior_override_t_range[0]), tf.less(t_step, self.vb_posterior_override_t_range[1])), lambda: self.calculate_z_posterior(i, d_to_z, current_z_posterior_src, m, override_l=self.vb_posterior_override_l, override_sigma=self.vb_posterior_override_sigma, override_myu=self.vb_posterior_override_myu, override_epsilon=self.vb_posterior_override_epsilon), lambda: self.calculate_z_posterior(i, d_to_z, current_z_posterior_src, m))
+                            current_z_posterior, current_z_posterior_mean, current_z_posterior_var = tf.cond(pred=tf.logical_and(tf.greater_equal(t_step, self.vb_posterior_override_t_range[0]), tf.less(t_step, self.vb_posterior_override_t_range[1])), true_fn=lambda: self.calculate_z_posterior(i, d_to_z, current_z_posterior_src, m, override_l=self.vb_posterior_override_l, override_sigma=self.vb_posterior_override_sigma, override_myu=self.vb_posterior_override_myu, override_epsilon=self.vb_posterior_override_epsilon), false_fn=lambda: self.calculate_z_posterior(i, d_to_z, current_z_posterior_src, m), name="cond_z_q_range")
                     else:
                         current_z_posterior = None
                         current_z_posterior_mean = previous_states["z_posterior_mean"][m][i]
@@ -906,15 +894,15 @@ class PVRNN(object):
                 # Select current Z
                 if self.vb_seq_prior[m][i]:
                     if self.vb_posterior_blend_factor > 0.0:
-                        current_z = tf.add_n([tf.multiply(current_z_prior, 1-self.vb_posterior_blend_factor), tf.multiply(current_z_posterior, self.vb_posterior_blend_factor)])
+                        current_z = tf.add_n([tf.multiply(current_z_prior, 1-self.vb_posterior_blend_factor), tf.multiply(current_z_posterior, self.vb_posterior_blend_factor)], name="addn_z_pq_blend")
                     elif self.vb_hybrid_posterior_src:
                         initial_start = self.vb_hybrid_posterior_src_range[0]
                         initial_end = self.vb_hybrid_posterior_src_range[1]
                         if self.vb_hybrid_prior_override:
-                            current_z_prior = tf.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior, current_z_prior)
-                            current_z_prior_mean = tf.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior_mean, current_z_prior_mean)
-                            current_z_prior_var = tf.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior_var, current_z_prior_var)
-                        current_z = tf.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior, current_z_prior)
+                            current_z_prior = tf.compat.v1.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior, current_z_prior, name="where_z_p_range")
+                            current_z_prior_mean = tf.compat.v1.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior_mean, current_z_prior_mean, name="where_zm_p_range")
+                            current_z_prior_var = tf.compat.v1.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior_var, current_z_prior_var, name="where_zv_p_range")
+                        current_z = tf.compat.v1.where(tf.logical_and(tf.greater_equal(t_step, initial_start), tf.less(t_step, initial_end)), current_z_posterior, current_z_prior, name="where_z_pq_range")
                     else:
                         current_z = current_z_posterior if not self.vb_prior_output else current_z_prior
                 else:
@@ -927,7 +915,7 @@ class PVRNN(object):
                 z_posterior_mean[m][i] = current_z_posterior_mean
                 z_posterior_var[m][i] = current_z_posterior_var
 
-                with tf.variable_scope('l' + str(i) + '_' + m):
+                with tf.compat.v1.variable_scope('l' + str(i) + '_' + m):
                     current_z_logits[m] = _linear([current_z], self.d_neurons[m][i], bias=True, scope_here=m+"_z_to_cell") if current_z is not None else tf.zeros([self.batch_size, self.d_neurons[m][i]])
 
             ## Synchronize level
@@ -938,11 +926,11 @@ class PVRNN(object):
                 # Add horizontal and vertical connections in this layer
                 if self.gradient_clip_input == -1: # special case: layer normalization
                     # L2 norm on d and z separately
-                    z_logits_norm = tf.nn.l2_normalize(current_z_logits[m], axis=1)
+                    z_logits_norm = tf.nn.l2_normalize(current_z_logits[m], axis=1, name="normalize_z")
                     if self.layers_concat_input:
-                        d_logits = tf.concat([lower_level_out_logits[m], higher_level_out_logits[m], current_level_out_logits[m]], axis=1)
+                        d_logits = tf.concat([lower_level_out_logits[m], higher_level_out_logits[m], current_level_out_logits[m]], axis=1, name="concat_d")
                     else:
-                        d_logits = tf.add_n([lower_level_out_logits[m], higher_level_out_logits[m], current_level_out_logits[m]])
+                        d_logits = tf.add_n([lower_level_out_logits[m], higher_level_out_logits[m], current_level_out_logits[m]], name="addn_d")
                     d_logits_norm = tf.nn.l2_normalize(d_logits, axis=1)
                     level_output = [z_logits_norm, d_logits_norm]
                 else:
@@ -956,13 +944,13 @@ class PVRNN(object):
                             level_output.append(current_level_out[x]) # current level output from all modalities
 
                 if self.layers_concat_input:
-                    sum_level_output = tf.concat(level_output, axis=1)
+                    sum_level_output = tf.concat(level_output, axis=1, name="concat_l_out")
                 else:
-                    sum_level_output = tf.add_n(level_output)
+                    sum_level_output = tf.add_n(level_output, name="addn_l_out")
 
                 # There's no gradient here, but keeping it for bc
                 if self.gradient_clip_input > 0: # clip input
-                    sum_level_output = tf.clip_by_norm(sum_level_output, self.gradient_clip_input)
+                    sum_level_output = tf.clip_by_norm(sum_level_output, self.gradient_clip_input, name="clip_l_out")
 
                 # Finally compute D
                 out[m][i], state[m][i], _ = self.layers[m][i](sum_level_output, previous_states["state"][m][i], scope=self.layers_names[m][i]) # TODO: read internal (gate) states?
@@ -971,7 +959,7 @@ class PVRNN(object):
 
         for m in self.modalities:
             # Layer 0 a.k.a. output layer
-            with tf.variable_scope('l0_' + m):
+            with tf.compat.v1.variable_scope('l0_' + m):
                 # Layer 0 has no Z units
                 z_prior[m][0] = previous_states["z_prior"][m][0]
                 z_prior_mean[m][0] = previous_states["z_prior_mean"][m][0]
@@ -987,9 +975,9 @@ class PVRNN(object):
                     l1_z_logits = _linear(z_to_output, self.dims[m] * self.softmax_quant, bias=True, scope_here=m+"_z_blend_output") if z_to_output is not None else tf.zeros([self.batch_size, self.dims[m] * self.softmax_quant])
                     l0_o += self.output_z_factor[m] * l1_z_logits
                 l0_softmax = []
-                for i in xrange(self.dims[m]):
-                    l0_softmax.append(tf.nn.softmax(l0_o[:, self.softmax_quant*i:self.softmax_quant*(i+1)]))
-                out[m][0] = tf.concat(l0_softmax, 1)
+                for i in range(self.dims[m]):
+                    l0_softmax.append(tf.nn.softmax(l0_o[:, self.softmax_quant*i:self.softmax_quant*(i+1)], name="softmax_l0_output"))
+                out[m][0] = tf.concat(l0_softmax, 1, name="concat_l0_output")
                 state[m][0] = l0_o
 
         return ops.internal_states_dict(t_step=t_step+1, out=out, out_initial=out_initial, state=state, 
@@ -1013,7 +1001,7 @@ class PVRNN(object):
             min_layer = layer
             max_layer = layer+1
 
-        for l in xrange(min_layer, max_layer):
+        for l in range(min_layer, max_layer):
             if idx is None:
                 min_seq = 0
                 max_seq = self.n_seq # output for each training sequence
@@ -1024,8 +1012,8 @@ class PVRNN(object):
             lgenerated = np.asarray(generated_all_layers[l])
             if compute_entropy and lgenerated.shape[2] > 1:
                 Hd = []
-                for n in xrange(lgenerated.shape[0]):
-                    Hd.append([entropy(lgenerated[n, step, :]**2+ops.eps_minval) for step in xrange(lgenerated.shape[1])])
+                for n in range(lgenerated.shape[0]):
+                    Hd.append([entropy(lgenerated[n, step, :]**2+ops.eps_minval) for step in range(lgenerated.shape[1])])
                 lgenerated = np.array(Hd)
                 lgenerated = np.expand_dims(lgenerated, axis=2)
             elif override_d is not None:
@@ -1038,7 +1026,7 @@ class PVRNN(object):
                 min_seq = 0
                 max_seq = 1
 
-            for n in xrange(min_seq, max_seq):
+            for n in range(min_seq, max_seq):
                 if filename_prefix:
                     filename = str(filename_prefix) + '_' + modality + "_d"  + str(l) + "_e" + str(epoch) + "_n" + str(n) + "_out.csv"
                 else:
@@ -1053,7 +1041,7 @@ class PVRNN(object):
 
                 ## Initial row
                 # Columns for CSV
-                for x in xrange(lgenerated.shape[2]): # output dims
+                for x in range(lgenerated.shape[2]): # output dims
                     if x == 0:
                         file_write.write("d%d_%d" % (l, x))
                     else:
@@ -1062,19 +1050,19 @@ class PVRNN(object):
 
                 if initial is not None: # print d0
                     initial_vals = np.asarray(initial[0][l])
-                    for x in xrange(lgenerated.shape[2]): # output dims
+                    for x in range(lgenerated.shape[2]): # output dims
                         if x == 0:
                             file_write.write("%f" % initial_vals[n, 0, x])
                         else:
                             file_write.write(",%f" % initial_vals[n, 0, x])
                     file_write.write("\n")
                 else: # don't print d0
-                    for x in xrange(lgenerated.shape[2]): # output dims
+                    for x in range(lgenerated.shape[2]): # output dims
                         file_write.write(",")
                     file_write.write("\n")
 
-                for step in xrange(lgenerated.shape[1]): # total timesteps
-                    for x in xrange(lgenerated.shape[2]): # output dims
+                for step in range(lgenerated.shape[1]): # total timesteps
+                    for x in range(lgenerated.shape[2]): # output dims
                         if x == 0:
                             file_write.write("%f" % lgenerated[n, step, x])    
                         else:
@@ -1100,12 +1088,12 @@ class PVRNN(object):
                 fig, ax = plt.subplots()
                 fig.tight_layout()
 
-                for n in xrange(min_seq, max_seq):
+                for n in range(min_seq, max_seq):
                     if save_after_each:
                         fig_i, ax_i = plt.subplots()
                         fig_i.tight_layout()
 
-                    for x in xrange(lgenerated.shape[2]): # for each dimension
+                    for x in range(lgenerated.shape[2]): # for each dimension
                         if fig_plot_dims is not None and x not in fig_plot_dims:
                             continue
                         if initial is not None:
@@ -1180,7 +1168,7 @@ class PVRNN(object):
             scaler_min_range = np.load(scale)
 
         # Decode first
-        for n in xrange(min_seq, max_seq):
+        for n in range(min_seq, max_seq):
             if self.softmax_quant > 1:
                 decoded_all[n, :, :] = ops.unsoftmax(generated[n, :, :], sm_minVal=sm_min, sm_maxVal=sm_max, softmax_quant=self.softmax_quant)
             else:
@@ -1190,7 +1178,7 @@ class PVRNN(object):
                 decoded_all[n, :, :] = (decoded_all[n, :, :] * scaler_min_range[n, self.dims[modality]:self.dims[modality]*2]) + scaler_min_range[n, 0:self.dims[modality]]
 
             if compute_entropy and override_d is None and decoded_all.shape[2] > 1:
-                decoded_all[n, :, :] = np.expand_dims(np.array([entropy(decoded_all[n, step, :]**2+ops.eps_minval) for step in xrange(decoded_all.shape[1])]), axis=2)
+                decoded_all[n, :, :] = np.expand_dims(np.array([entropy(decoded_all[n, step, :]**2+ops.eps_minval) for step in range(decoded_all.shape[1])]), axis=2)
 
         if override_d is not None:
             source_d = override_d[modality][0]
@@ -1203,7 +1191,7 @@ class PVRNN(object):
             max_seq = 1
 
         if not skip_csv:
-            for n in xrange(min_seq, max_seq):
+            for n in range(min_seq, max_seq):
                 decoded = decoded_all[n, :, :]
                 if filename_prefix:
                     filename = str(filename_prefix) + '_' + modality + "_d0_e" + str(epoch) + "_n" + str(n) + "_decoded.csv"
@@ -1219,19 +1207,19 @@ class PVRNN(object):
 
                 ## Initial row
                 # Columns for CSV
-                for x in xrange(decoded.shape[1]): # output dims
+                for x in range(decoded.shape[1]): # output dims
                     if x == 0:
                         file_write.write("J%d" % x)
                     else:
                         file_write.write(",J%d" % x)
                 file_write.write("\n")
                 # Skip t=0
-                for x in xrange(decoded.shape[1]): # output dims
+                for x in range(decoded.shape[1]): # output dims
                     file_write.write(",")
                 file_write.write("\n")
 
-                for step in xrange(generated.shape[1]): # total timesteps
-                    for x in xrange(decoded.shape[1]): # output dims
+                for step in range(generated.shape[1]): # total timesteps
+                    for x in range(decoded.shape[1]): # output dims
                         if x == 0:
                             file_write.write("%f" % decoded[step, x])
                         else:
@@ -1268,14 +1256,14 @@ class PVRNN(object):
                 ax2.set_xlim((fig_x_lim[0], fig_x_lim[1]))
                 ax2.set_ylim((fig_y_lim[0], fig_y_lim[1]))
 
-            for n in xrange(min_seq, max_seq):
+            for n in range(min_seq, max_seq):
                 if save_after_each:
                     fig_i, ax_i = plt.subplots()
                     fig_i.tight_layout()
                 
                 decoded = decoded_all[n, :, :]
 
-                for x in xrange(decoded.shape[1]): # for each dimension
+                for x in range(decoded.shape[1]): # for each dimension
                     if fig_plot_dims is not None and x not in fig_plot_dims:
                         continue
                     x_plot = np.linspace(1, generated.shape[1]+1, generated.shape[1]) # timesteps on X
@@ -1389,12 +1377,12 @@ class PVRNN(object):
         if not isinstance(fig_ymax, (list, tuple, np.ndarray)):
             fig_ymax = np.repeat(fig_ymax, max_layer-min_layer)
 
-        for l in xrange(min_layer, max_layer):
+        for l in range(min_layer, max_layer):
             layer_z = np.asarray(generated[l])
             if compute_entropy and layer_z.shape[2] > 1:
                 Hz = []
-                for n in xrange(layer_z.shape[0]):
-                    Hz.append([entropy(layer_z[n, step, :]**2+ops.eps_minval) for step in xrange(layer_z.shape[1])])
+                for n in range(layer_z.shape[0]):
+                    Hz.append([entropy(layer_z[n, step, :]**2+ops.eps_minval) for step in range(layer_z.shape[1])])
                 layer_z = np.array(Hz)
                 layer_z = np.expand_dims(layer_z, axis=2)
 
@@ -1405,7 +1393,7 @@ class PVRNN(object):
             else:
                 min_seq = idx
                 max_seq = idx+1
-            for n in xrange(min_seq, max_seq):
+            for n in range(min_seq, max_seq):
                 if filename_prefix:
                     filename_z = str(filename_prefix) + '_' + modality + "_z" + str(l) + "_e" + str(epoch) + "_n" + str(n) + ".csv"
                 else:
@@ -1420,19 +1408,19 @@ class PVRNN(object):
 
                 ## Initial row
                 # Columns for CSV
-                for x in xrange(layer_z.shape[2]): # output dims
+                for x in range(layer_z.shape[2]): # output dims
                     if x == 0:
                         file_write_z.write("z%d_%d" % (l, x))
                     else:
                         file_write_z.write(",z%d_%d" % (l, x))
                 file_write_z.write("\n")
                 # Skip t=0
-                for x in xrange(layer_z.shape[2]): # output dims
+                for x in range(layer_z.shape[2]): # output dims
                     file_write_z.write(",")
                 file_write_z.write("\n")
 
-                for step in xrange(self.max_timesteps): # total timesteps
-                    for x in xrange(layer_z.shape[2]): # units
+                for step in range(self.max_timesteps): # total timesteps
+                    for x in range(layer_z.shape[2]): # units
                         if x == 0:
                             file_write_z.write("%f" % layer_z[n, step, x])
                         else:
@@ -1463,12 +1451,12 @@ class PVRNN(object):
                     fig, ax = plt.subplots()
                     fig.tight_layout()
 
-                for n in xrange(min_seq, max_seq):
+                for n in range(min_seq, max_seq):
                     if save_after_each:
                         fig_i, ax_i = plt.subplots()
                         fig_i.tight_layout()
 
-                    for x in xrange(layer_z.shape[2]): # for each dimension
+                    for x in range(layer_z.shape[2]): # for each dimension
                         x_plot = np.linspace(1, self.max_timesteps+1, self.max_timesteps) # timesteps on X
                         y_plot = layer_z[n, :, x]
 
@@ -1536,7 +1524,7 @@ class PVRNN(object):
             min_layer = layer
             max_layer = layer+1
 
-        for l in xrange(min_layer, max_layer):
+        for l in range(min_layer, max_layer):
             # Select which sequence to save
             if idx is None:
                 min_seq = 0
@@ -1544,7 +1532,7 @@ class PVRNN(object):
             else:
                 min_seq = idx
                 max_seq = idx+1
-            for n in xrange(min_seq, max_seq):
+            for n in range(min_seq, max_seq):
                 layer_z = generated[:,l,n,:]
                 if len(layer_z.shape) > 2:
                     layer_z = np.squeeze(layer_z)
@@ -1563,19 +1551,19 @@ class PVRNN(object):
                 ## Initial row
                 # Columns for CSV
                 num_z = self.z_units[modality][l] if self.vb_posterior_src_extend else self.z_units[modality][l]*2
-                for x in xrange(num_z): # output dims
+                for x in range(num_z): # output dims
                     if x == 0:
                         file_write_z.write("zd%d_%d" % (l, x))
                     else:
                         file_write_z.write(",zd%d_%d" % (l, x))
                 file_write_z.write("\n")
                 # Skip t=0
-                for x in xrange(num_z): # output dims
+                for x in range(num_z): # output dims
                     file_write_z.write(",")
                 file_write_z.write("\n")
 
-                for step in xrange(self.max_timesteps):
-                    for x in xrange(num_z):
+                for step in range(self.max_timesteps):
+                    for x in range(num_z):
                         if x == 0:
                             file_write_z.write("%f" % layer_z[step, x])
                         else:
@@ -1606,7 +1594,7 @@ class PVRNN(object):
                     fig, ax = plt.subplots()
                     fig.tight_layout()
                         
-                for n in xrange(min_seq, max_seq):
+                for n in range(min_seq, max_seq):
                     layer_z = generated[:,l,n,:]
                     if len(layer_z.shape) > 2:
                         layer_z = np.squeeze(layer_z)
@@ -1614,7 +1602,7 @@ class PVRNN(object):
                         fig_i, ax_i = plt.subplots()
                         fig_i.tight_layout()
 
-                    for x in xrange(num_z): # for each dimension
+                    for x in range(num_z): # for each dimension
                         x_plot = np.linspace(1, layer_z.shape[0]+1, layer_z.shape[0]) # timesteps on X
                         y_plot = layer_z[:, x]
 
@@ -1683,7 +1671,7 @@ class PVRNN(object):
             min_layer = layer
             max_layer = layer+1
 
-        for l in xrange(min_layer, max_layer):
+        for l in range(min_layer, max_layer):
             layer_l = np.asarray(generated[l])[1]
             if abs_values:
                 layer_l = abs(layer_l)
@@ -1695,7 +1683,7 @@ class PVRNN(object):
             else:
                 min_seq = idx
                 max_seq = idx+1
-            for n in xrange(min_seq, max_seq):
+            for n in range(min_seq, max_seq):
                 if filename_prefix:
                     filename = str(filename_prefix) + '_' + modality + "_l" + str(l) + "_e" + str(epoch) + "_n" + str(n) + ".csv"
                 else:
@@ -1713,7 +1701,7 @@ class PVRNN(object):
                 file_write.write(filename_prefix)
                 file_write.write("\n")
 
-                for step in xrange(self.max_timesteps): # total timesteps
+                for step in range(self.max_timesteps): # total timesteps
                     file_write.write("%f\n" % layer_l[n, step])
                 file_write.close()
 
@@ -1740,7 +1728,7 @@ class PVRNN(object):
                     fig, ax = plt.subplots()
                     fig.tight_layout()
 
-                for n in xrange(min_seq, max_seq):
+                for n in range(min_seq, max_seq):
                     if save_after_each:
                         fig_i, ax_i = plt.subplots()
                         fig_i.tight_layout()

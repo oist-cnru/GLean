@@ -19,9 +19,9 @@ operators that allow adding dropouts, projections, or embeddings for inputs.
 Constructing multi-layer cells is supported by the class `MultiRNNCell`, or by
 calling the `rnn` ops several times.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+
+
+
 
 import collections
 import hashlib
@@ -47,7 +47,7 @@ from tensorflow.python.ops import variables as tf_variables
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.util import nest
 
-from tensorflow.contrib.rnn import LSTMStateTuple
+from tensorflow.compat.v1.nn.rnn_cell import LSTMStateTuple
 import tensorflow as tf
 import numpy as np
 
@@ -96,7 +96,7 @@ class BasicLSTMCell():
     Returns:
       A pair containing the new hidden state, and the new state
     """
-    with tf.variable_scope(scope or type(self).__name__):
+    with tf.compat.v1.variable_scope(scope or type(self).__name__):
       sigmoid = math_ops.sigmoid
       # Parameters of gates are concatenated into one multiply for efficiency.
       # c: output after activation, h: output
@@ -105,14 +105,14 @@ class BasicLSTMCell():
 
       # i = input_gate, j = new_input, f = forget_gate, o = output_gate
       i, j, f, o = array_ops.split(value=val_linear, num_or_size_splits=4, axis=1)
-      new_c = (c * sigmoid(f + self._forget_bias) + sigmoid(i) * self._activation(j))
-      new_h = self._activation(new_c) * sigmoid(o)
+      new_h = tf.add(c * sigmoid(f + self._forget_bias), sigmoid(i) * self._activation(j), name="lstm_h")
+      new_c = self._activation(new_h) * sigmoid(o)
 
-      new_state = tf.tuple([new_c, new_h]) # state contains both pre and post activation
+      new_state = tf.tuple(tensors=[new_c, new_h]) # state contains both pre and post activation
       # Also include gate values
       gate_states = tf.concat(axis=0, values=[i, j, f, o])
 
-      return new_h, new_state, gate_states
+      return new_c, new_state, gate_states
 
 
 
@@ -127,11 +127,11 @@ class BasicMTRNNCell():
     with vs.variable_scope(scope or type(self).__name__):
       _, prev_h = state # previous state of the neurons
       h = _linear(inputs, self._num_units, bias=True, scope_here='h')
-      new_h = (1.0 - self._eta) * prev_h + self._eta * h
+      new_h = tf.add((1.0 - self._eta) * prev_h, self._eta * h, name="mtrnn_h")
       new_c = self._activation(new_h)
 
       # Remain compatible with LSTM cell
-      new_state = tf.tuple([new_c, new_h]) # state contains both pre and post activation
+      new_state = tf.tuple(tensors=[new_c, new_h]) # state contains both pre and post activation
       return new_c, new_state, None
 
 
@@ -167,11 +167,11 @@ def _linear(args,
   for shape in shapes:
     if shape.ndims != 2:
       raise ValueError("linear is expecting 2D arguments: %s" % shapes)
-    if shape[1].value is None:
+    if shape[1] is None:
       raise ValueError("linear expects shape[1] to be provided for shape %s, "
                        "but saw %s" % (shape, shape[1]))
     else:
-      total_arg_size += shape[1].value
+      total_arg_size += shape[1]
 
   dtype = [a.dtype for a in args][0]
 
@@ -181,7 +181,7 @@ def _linear(args,
   with vs.variable_scope(scope or 'ker') as outer_scope:
     # print(outer_scope)
     if kernel_initializer is None:
-      kernel_initializer = tf.glorot_normal_initializer()
+      kernel_initializer = tf.compat.v1.glorot_normal_initializer()
     weights = vs.get_variable(
         _WEIGHTS_VARIABLE_NAME, [total_arg_size, output_size],
         dtype=dtype,
@@ -195,7 +195,7 @@ def _linear(args,
     with vs.variable_scope(outer_scope) as inner_scope:
       inner_scope.set_partitioner(None)
       if bias_initializer is None:
-        bias_initializer = tf.zeros_initializer()
+        bias_initializer = tf.compat.v1.zeros_initializer()
       biases = vs.get_variable(
           _BIAS_VARIABLE_NAME, [output_size],
           dtype=dtype,

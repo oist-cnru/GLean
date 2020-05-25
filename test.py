@@ -1,13 +1,10 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-import __builtin__
+import builtins
 import numpy as np
 import tensorflow as tf
 import time
 import sys
 import os
-import ConfigParser
+import configparser
 import argparse
 import csv
 
@@ -16,11 +13,11 @@ import ops
 
 # Override default print
 def print(*args, **kwargs):
-    __builtin__.print(sys.argv[0][:-3], end = ": ")
-    return __builtin__.print(*args, **kwargs)
+    builtins.print(sys.argv[0][:-3], end = ": ")
+    return builtins.print(*args, **kwargs)
 
 def xprint(*args, **kwargs):
-    return __builtin__.print(*args, **kwargs)
+    return builtins.print(*args, **kwargs)
 
 NUM_CPU = 4
 NUM_GPU = 0
@@ -29,7 +26,7 @@ os.environ["KMP_BLOCKTIME"] = "0"
 os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
 os.environ["KMP_SETTINGS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
-tf_config = tf.ConfigProto(allow_soft_placement=True, intra_op_parallelism_threads=NUM_CPU, inter_op_parallelism_threads=NUM_CPU, device_count={"GPU": NUM_GPU, "CPU": NUM_CPU}) # use CPU only
+tf_config = tf.compat.v1.ConfigProto(allow_soft_placement=True, intra_op_parallelism_threads=NUM_CPU, inter_op_parallelism_threads=NUM_CPU, device_count={"GPU": NUM_GPU, "CPU": NUM_CPU}) # use CPU only
 # tf_config = tf.ConfigProto()
 # tf_config.gpu_options.allow_growth = True
 # tf_config.graph_options.rewrite_options.auto_mixed_precision = True # enable FP16/FP32 auto optimization for Volta+ GPUs (requires TF version >=1.14)
@@ -67,7 +64,7 @@ reset_posterior = False
 if len(sys.argv) > 1:
     if sys.argv[1] != "-h" and sys.argv[1] != "--help":
         config_file = sys.argv[1]
-        config = ConfigParser.ConfigParser()
+        config = configparser.ConfigParser()
         if len(config.read(config_file)) == 0:
             print("Failed to read config file " + config_file)
             exit(1)
@@ -195,10 +192,10 @@ if "fig_xy_dims" in config_testing:
     plot_x_lim = [float(x.strip()) for x in config_testing["fig_x_lim"].split(',')]
     plot_y_lim = [float(y.strip()) for y in config_testing["fig_y_lim"].split(',')]
 
-with tf.Session(config = tf_config) as sess:
+with tf.compat.v1.Session(config = tf_config) as sess:
     rnn = PVRNN(sess, config_data, config_network, training=False, prior_generation=prior_generation, reset_posterior_src=reset_posterior, hybrid_posterior_src=override_posterior_src_range, hybrid_posterior_src_idx=override_posterior_src_idx, overrides=test_overrides)
     print("Loading model")
-    tf.global_variables_initializer().run()
+    tf.compat.v1.global_variables_initializer().run()
     epoch = rnn.load(training_path, ckpt_name=training_load_checkpoint)
     if epoch == -1:
         print("Trained model required for testing!")
